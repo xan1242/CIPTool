@@ -3,9 +3,11 @@
 
 // My assumptions
 // CIP = Card Image Pack
-// CPM = Card Picture Middle
-// CPJ = ???
+// CPM = Card Picture Middle - used on field
+// CPJ = Card Picture JPEG - used in card album - TODO: find more info how to decode the jpeg, game uses sceJpeg
+// CPL = Card Pallete - palletized images, unknown where they're used
 
+#include "CIPTool.h"
 #include <iostream>
 #include <ctype.h>
 
@@ -17,13 +19,19 @@
 #define CIP_MAGICNUM 0x1A504943
 #define CPM_MAGICNUM 0x1A4D5043
 #define CPJ_MAGICNUM 0x1A4A5043
-#define CIP_DEFAULTSIZE 0x1000
-#define DEFAULT_HEADER_FILENAME "header.bin"
+#define CPL_MAGICNUM 0x1A4C5043
+
+// extraction modes...
+#define CIP_MODE 0
+#define CPM_MODE 1
+#define CPJ_MODE 2
+#define CPL_MODE 3
 
 char OutputFileName[1024];
 char TempStringBuffer[1024];
 char* AutogenFolderName;
 wchar_t MkDirPath[1024];
+char GIMHeader[] = CPM_GIMHEADER;
 
 // pack mode stuff
 char** FileDirectoryListing;
@@ -220,7 +228,7 @@ unsigned int CountAltArtFiles(const char* InFolder, unsigned int CardID)
 }
 
 
-int PackCIP(const char* InFolder, const char* OutFilename)
+int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
 {
     FILE* fin = NULL;
     // open the output file
@@ -247,7 +255,22 @@ int PackCIP(const char* InFolder, const char* OutFilename)
     GetDirectoryListing(InFolder);
 
     // prepare header
-    InputCIPHeader.MagicNum = CIP_MAGICNUM;
+    switch (PackingMode)
+    {
+    case CPM_MODE:
+        InputCIPHeader.MagicNum = CPM_MAGICNUM;
+        break;
+    case CPJ_MODE:
+        InputCIPHeader.MagicNum = CPJ_MAGICNUM;
+        break;
+    case CPL_MODE:
+        InputCIPHeader.MagicNum = CPL_MAGICNUM;
+        break;
+    default:
+        InputCIPHeader.MagicNum = CIP_MAGICNUM;
+        break;
+    }
+
     InputCIPHeader.MinCardNumber = FindMinCardNumber();
     InputCIPHeader.MaxCardNumber = FindMaxCardNumber();
     InputCIPHeader.OffsetTableTop = sizeof(CIPHeader);
@@ -259,7 +282,11 @@ int PackCIP(const char* InFolder, const char* OutFilename)
         printf("ERROR: Can't open %s for stat reading!\n", TempStringBuffer);
         return -1;
     }
-    InputCIPHeader.BitshiftSize = st.st_size >> 11;
+    if (PackingMode == CPM_MODE)
+        InputCIPHeader.BitshiftSize = ((st.st_size) - sizeof(GIMHeader)) >> 11;
+    else
+        InputCIPHeader.BitshiftSize = st.st_size >> 11;
+
     OffsetTableSize = ((InputCIPHeader.MaxCardNumber - InputCIPHeader.MinCardNumber) << 3) + 8;
     AltOffsetTableSize = AltArtCount * 8;
     InputCIPHeader.HeaderSize = sizeof(CIPHeader) + OffsetTableSize + AltOffsetTableSize + 8;
@@ -406,6 +433,8 @@ int PackCIP(const char* InFolder, const char* OutFilename)
                         return -1;
                     }
                     memset(InFileBuffer, 0, InputCIPHeader.BitshiftSize << 11);
+                    if (PackingMode == CPM_MODE)
+                        fseek(fin, sizeof(GIMHeader), SEEK_SET);
                     fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
                     fseek(fout, CIPPackerInfo[OffsetPairCounter].GIMFileOffset[j], SEEK_SET);
                     fwrite(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fout);
@@ -424,6 +453,8 @@ int PackCIP(const char* InFolder, const char* OutFilename)
                     return -1;
                 }
                 memset(InFileBuffer, 0, InputCIPHeader.BitshiftSize << 11);
+                if (PackingMode == CPM_MODE)
+                    fseek(fin, sizeof(GIMHeader), SEEK_SET);
                 fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
                 fseek(fout, *CIPPackerInfo[OffsetPairCounter].GIMFileOffset, SEEK_SET);
                 fwrite(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fout);
@@ -442,7 +473,7 @@ int PackCIP(const char* InFolder, const char* OutFilename)
     return 0;
 }
 
-int ExtractCIP(const char* InFilename, const char* OutFolder)
+int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode)
 {
     FILE* fin = fopen(InFilename, "rb");
     FILE* fout = NULL;
@@ -562,6 +593,8 @@ int ExtractCIP(const char* InFilename, const char* OutFolder)
                     }
                     memset(GIMBuffer, 0, GIMFileSize);
                     fread(GIMBuffer, GIMFileSize, 1, fin);
+                    if (ExtractionMode == CPM_MODE)
+                        fwrite(GIMHeader, sizeof(GIMHeader), 1, fout);
                     fwrite(GIMBuffer, GIMFileSize, 1, fout);
                     fclose(fout);
                 }
@@ -589,6 +622,8 @@ int ExtractCIP(const char* InFilename, const char* OutFolder)
                 }
                 memset(GIMBuffer, 0, GIMFileSize);
                 fread(GIMBuffer, GIMFileSize, 1, fin);
+                if (ExtractionMode == CPM_MODE)
+                    fwrite(GIMHeader, sizeof(GIMHeader), 1, fout);
                 fwrite(GIMBuffer, GIMFileSize, 1, fout);
                 fclose(fout);
             }
@@ -622,15 +657,19 @@ int DetectAndExtract(const char* InFilename, const char* OutFolder)
     {
     case CIP_MAGICNUM:
         printf("Detected a CIP file!\n");
-        ExtractCIP(InFilename, OutFolder);
+        ExtractCIP(InFilename, OutFolder, CIP_MODE);
         break;
     case CPM_MAGICNUM:
         printf("Detected a CPM (middle) file!\n");
-        printf("Unimplemented...\n");
+        ExtractCIP(InFilename, OutFolder, CPM_MODE);
         break;
     case CPJ_MAGICNUM:
         printf("Detected a CPJ file!\n");
         printf("Unimplemented...\n");
+        break;
+    case CPL_MAGICNUM:
+        printf("Detected a CPL file!\n");
+        ExtractCIP(InFilename, OutFolder, CPL_MODE);
         break;
     default:
         printf("This is an invalid file! Read file magic: 0x%X\n", CIPMagic);
@@ -646,14 +685,32 @@ int main(int argc, char* argv[])
 
     if (argc < 2)
     {
-        printf("USAGE (extract): InFile.cip [OutFolder]\nUSAGE (pack): InFolder OutCIP.cip\n");
+        printf("USAGE (extract): %s InFile.cip [OutFolder]\nUSAGE (pack): %s -p InFolder OutCIP.cip\nUSAGE (pack middle): %s -pm InFolder OutCIP.cip\nUSAGE (pack CPL): %s -pl InFolder OutCIP.cip\n", argv[0], argv[0], argv[0], argv[0]);
         return 0;
     }
 
     if (argv[1][0] == '-' && argv[1][1] == 'p')
     {
-        printf("Packing mode\n");
-        PackCIP(argv[2], argv[3]);
+        switch (argv[1][2])
+        {
+        case 'm':
+            printf("Packing mode (middle)\n");
+            PackCIP(argv[2], argv[3], CPM_MODE);
+            break;
+        case 'j':
+            printf("Packing mode (CPJ)\n");
+            printf("Unimplemented...\n");
+            //PackCIP(argv[2], argv[3], CPJ_MODE);
+            break;
+        case 'l':
+            printf("Packing mode (CPL)\n");
+            PackCIP(argv[2], argv[3], CPL_MODE);
+            break;
+        default:
+            printf("Packing mode\n");
+            PackCIP(argv[2], argv[3], CIP_MODE);
+            break;
+        }
         return 0;
     }
 
