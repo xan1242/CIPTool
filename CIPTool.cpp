@@ -4,7 +4,7 @@
 // My assumptions
 // CIP = Card Image Pack
 // CPM = Card Picture Middle - used on field
-// CPJ = Card Picture JPEG - used in card album - TODO: find more info how to decode the jpeg, game uses sceJpeg
+// CPJ = Card Picture JPEG - used in card album
 // CPL = Card Pallete - palletized images, unknown where they're used
 
 #include "CIPTool.h"
@@ -26,6 +26,7 @@
 #define CPM_MODE 1
 #define CPJ_MODE 2
 #define CPL_MODE 3
+#define CPJ_TFSP_MODE 4
 
 char OutputFileName[1024];
 char TempStringBuffer[1024];
@@ -33,6 +34,7 @@ char* AutogenFolderName;
 wchar_t MkDirPath[1024];
 const char GIMHeader[] = CPM_GIMHEADER;
 const char JFIFHeader[] = CPJ_JFIFHEADER;
+const char JFIFHeaderTFSP[] = CPJ_JFIFHEADER_TFSP;
 
 // pack mode stuff
 char** FileDirectoryListing;
@@ -313,6 +315,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
     case CPM_MODE:
         InputCIPHeader.MagicNum = CPM_MAGICNUM;
         break;
+    case CPJ_TFSP_MODE:
     case CPJ_MODE:
         InputCIPHeader.MagicNum = CPJ_MAGICNUM;
         break;
@@ -357,7 +360,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
 
     for (unsigned int i = InputCIPHeader.MinCardNumber; i <= InputCIPHeader.MaxCardNumber; i++)
     {
-        if (PackingMode == CPJ_MODE)
+        if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
             sprintf(TempStringBuffer, "%s\\%d.jpg", InFolder, i);
         else
             sprintf(TempStringBuffer, "%s\\%d.gim", InFolder, i);
@@ -366,7 +369,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
         CIPPackerInfo[PackerPrepCounter].OffsetPair = (CIPOffsetPair*)calloc(1, sizeof(CIPOffsetPair));
         if (bFileExists(TempStringBuffer))
         {
-            if (PackingMode == CPJ_MODE)
+            if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
                 sprintf(TempStringBuffer, "%d.jpg", i);
             else
                 sprintf(TempStringBuffer, "%d.gim", i);
@@ -374,13 +377,13 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
         }
         if (AltArtCount)
         {
-            if (PackingMode == CPJ_MODE)
+            if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
                 sprintf(TempStringBuffer, "%s\\%d_0.jpg", InFolder, i);
             else
                 sprintf(TempStringBuffer, "%s\\%d_0.gim", InFolder, i);
             if (bFileExists(TempStringBuffer))
             {
-                if (PackingMode == CPJ_MODE)
+                if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
                     sprintf(TempStringBuffer, "%s\\%d_0.jpg", InFolder, i);
                 else
                     sprintf(TempStringBuffer, "%s\\%d_0.gim", InFolder, i);
@@ -488,7 +491,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
             {
                 for (unsigned int j = 0; j < CIPPackerInfo[OffsetPairCounter].AltArtCount; j++)
                 {
-                    if (PackingMode == CPJ_MODE)
+                    if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
                         sprintf(TempStringBuffer, "%s\\%d_%d.jpg", InFolder, CIPPackerInfo[OffsetPairCounter].CardID, j);
                     else
                         sprintf(TempStringBuffer, "%s\\%d_%d.gim", InFolder, CIPPackerInfo[OffsetPairCounter].CardID, j);
@@ -506,7 +509,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
                     fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
                     fseek(fout, CIPPackerInfo[OffsetPairCounter].GIMFileOffset[j], SEEK_SET);
 
-                    if (PackingMode == CPJ_MODE)
+                    if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
                     {
                         long EncodeSecret = _byteswap_ushort((unsigned short)i);
                         *(unsigned short*)((int)InFileBuffer + 0x9E) = EncodeSecret;
@@ -534,7 +537,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
                 memset(InFileBuffer, 0, InputCIPHeader.BitshiftSize << 11);
                 if (PackingMode == CPM_MODE)
                     fseek(fin, sizeof(GIMHeader), SEEK_SET);
-                if (PackingMode == CPJ_MODE)
+                if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
                 {
                     fseek(fin, sizeof(JFIFHeader), SEEK_SET);
                     fread((void*)((int)InFileBuffer + 0xA0), InputCIPHeader.BitshiftSize << 11, 1, fin);
@@ -544,7 +547,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
 
                 fseek(fout, *CIPPackerInfo[OffsetPairCounter].GIMFileOffset, SEEK_SET);
 
-                if (PackingMode == CPJ_MODE)
+                if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
                 {
                     long EncodeSecret = _byteswap_ushort((unsigned short)i);
                     *(unsigned short*)((int)InFileBuffer + 0x9E) = EncodeSecret;
@@ -675,7 +678,7 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
                 if (!(OffsetPair->Offset == 0))
                 {
                     fseek(fin, OffsetPair->Offset, SEEK_SET);
-                    if (ExtractionMode == CPJ_MODE)
+                    if ((ExtractionMode == CPJ_MODE) || (ExtractionMode == CPJ_TFSP_MODE))
                         sprintf(OutputFileName, "%s\\%d_%d.jpg", OutFolder, i, SubArtCounter);
                     else
                         sprintf(OutputFileName, "%s\\%d_%d.gim", OutFolder, i, SubArtCounter);
@@ -693,9 +696,12 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
                     fread(GIMBuffer, GIMFileSize, 1, fin);
                     if (ExtractionMode == CPM_MODE)
                         fwrite(GIMHeader, sizeof(GIMHeader), 1, fout);
-                    if (ExtractionMode == CPJ_MODE)
+                    if ((ExtractionMode == CPJ_MODE) || (ExtractionMode == CPJ_TFSP_MODE))
                     {
-                        fwrite(JFIFHeader, sizeof(JFIFHeader), 1, fout);
+                        if (ExtractionMode == CPJ_TFSP_MODE)
+                            fwrite(JFIFHeaderTFSP, sizeof(JFIFHeaderTFSP), 1, fout);
+                        else
+                            fwrite(JFIFHeader, sizeof(JFIFHeader), 1, fout);
                         JpegDataCodec(GIMBuffer, GIMFileSize);
                         fwrite((void*)((int)GIMBuffer + 0xA0), JpegFindEnd(GIMBuffer, GIMFileSize) - 0xA0, 1, fout);
                     }
@@ -714,7 +720,7 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
             if (!(OffsetPair->Offset == 0))
             {
                 fseek(fin, OffsetPair->Offset, SEEK_SET);
-                if (ExtractionMode == CPJ_MODE)
+                if ((ExtractionMode == CPJ_MODE) || (ExtractionMode == CPJ_TFSP_MODE))
                     sprintf(OutputFileName, "%s\\%d.jpg", OutFolder, i);
                 else
                     sprintf(OutputFileName, "%s\\%d.gim", OutFolder, i);
@@ -732,9 +738,12 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
                 fread(GIMBuffer, GIMFileSize, 1, fin);
                 if (ExtractionMode == CPM_MODE)
                     fwrite(GIMHeader, sizeof(GIMHeader), 1, fout);
-                if (ExtractionMode == CPJ_MODE)
+                if ((ExtractionMode == CPJ_MODE) || (ExtractionMode == CPJ_TFSP_MODE))
                 {
-                    fwrite(JFIFHeader, sizeof(JFIFHeader), 1, fout);
+                    if (ExtractionMode == CPJ_TFSP_MODE)
+                        fwrite(JFIFHeaderTFSP, sizeof(JFIFHeaderTFSP), 1, fout);
+                    else
+                        fwrite(JFIFHeader, sizeof(JFIFHeader), 1, fout);
                     JpegDataCodec(GIMBuffer, GIMFileSize);
                     fwrite((void*)((int)GIMBuffer + 0xA0), JpegFindEnd(GIMBuffer, GIMFileSize) - 0xA0, 1, fout);
                 }
@@ -751,7 +760,7 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
     return 0;
 }
 
-int DetectAndExtract(const char* InFilename, const char* OutFolder)
+int DetectAndExtract(const char* InFilename, const char* OutFolder, bool bTFSP_CPJ)
 {
     FILE* fin = fopen(InFilename, "rb");
 
@@ -780,7 +789,10 @@ int DetectAndExtract(const char* InFilename, const char* OutFolder)
         break;
     case CPJ_MAGICNUM:
         printf("Detected a CPJ file!\n");
-        ExtractCIP(InFilename, OutFolder, CPJ_MODE);
+        if (bTFSP_CPJ)
+            ExtractCIP(InFilename, OutFolder, CPJ_TFSP_MODE);
+        else
+            ExtractCIP(InFilename, OutFolder, CPJ_MODE);
         break;
     case CPL_MAGICNUM:
         printf("Detected a CPL file!\n");
@@ -800,7 +812,7 @@ int main(int argc, char* argv[])
 
     if (argc < 2)
     {
-        printf("USAGE (extract): %s InFile.cip [OutFolder]\nUSAGE (pack): %s -p InFolder OutCIP.cip\nUSAGE (pack middle): %s -pm InFolder OutCIP.cip\nUSAGE (pack CPL): %s -pl InFolder OutCIP.cip\nUSAGE (pack CPJ): %s -pj InFolder OutCIP.cip\n", argv[0], argv[0], argv[0], argv[0], argv[0]);
+        printf("USAGE (extract): %s InFile.cip [OutFolder]\nUSAGE (extract 256x256 CPJ): %s -s InFile.cip [OutFolder]\nUSAGE (pack): %s -p InFolder OutCIP.cip\nUSAGE (pack middle): %s -pm InFolder OutCIP.cip\nUSAGE (pack CPL): %s -pl InFolder OutCIP.cip\nUSAGE (pack CPJ): %s -pj InFolder OutCIP.cip\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 0;
     }
 
@@ -820,11 +832,33 @@ int main(int argc, char* argv[])
             printf("Packing mode (CPL)\n");
             PackCIP(argv[2], argv[3], CPL_MODE);
             break;
+        case 's':
+            printf("Packing mode (256x256 CPJ)\n");
+            PackCIP(argv[2], argv[3], CPJ_TFSP_MODE);
+            break;
         default:
             printf("Packing mode\n");
             PackCIP(argv[2], argv[3], CIP_MODE);
             break;
         }
+        return 0;
+    }
+
+    if (argv[1][0] == '-' && argv[1][1] == 's')
+    {
+        printf("Extraction mode (256x256 CPJ)\n");
+        if (argc == 3) // Extraction mode
+        {
+            char* PatchPoint;
+            AutogenFolderName = (char*)calloc(strlen(argv[2]), sizeof(char));
+            strcpy(AutogenFolderName, argv[2]);
+            PatchPoint = strrchr(AutogenFolderName, '.');
+            *PatchPoint = 0;
+        }
+        else
+            AutogenFolderName = argv[3];
+
+        DetectAndExtract(argv[2], AutogenFolderName, true);
         return 0;
     }
 
@@ -840,7 +874,7 @@ int main(int argc, char* argv[])
     else
         AutogenFolderName = argv[2];
 
-    DetectAndExtract(argv[1], AutogenFolderName);
+    DetectAndExtract(argv[1], AutogenFolderName, false);
 
     return 0;
 }
