@@ -31,10 +31,12 @@ char OutputFileName[1024];
 char TempStringBuffer[1024];
 char* AutogenFolderName;
 wchar_t MkDirPath[1024];
-char GIMHeader[] = CPM_GIMHEADER;
+const char GIMHeader[] = CPM_GIMHEADER;
+const char JFIFHeader[] = CPJ_JFIFHEADER;
 
 // pack mode stuff
 char** FileDirectoryListing;
+unsigned long* GIMFileSizes = NULL;
 unsigned int GIMFileCount = 0;
 unsigned int AltArtCount = 0;
 
@@ -115,6 +117,7 @@ DWORD GetDirectoryListing(const char* FolderPath) // platform specific code, usi
 
     // then create a file list in an array, redo the code
     FileDirectoryListing = (char**)calloc(GIMFileCount, sizeof(char*));
+    GIMFileSizes = (unsigned long*)calloc(GIMFileCount, sizeof(unsigned long));
 
     ffd = { 0 };
     hFind = FindFirstFile(szDir, &ffd);
@@ -129,6 +132,7 @@ DWORD GetDirectoryListing(const char* FolderPath) // platform specific code, usi
         if (!(ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
         {
             wcstombs(MBFilename, ffd.cFileName, MAX_PATH);
+            GIMFileSizes[NameCounter] = ffd.nFileSizeLow + (ffd.nFileSizeHigh << 16);
             FileDirectoryListing[NameCounter] = (char*)calloc(strlen(MBFilename) + 1, sizeof(char));
             strcpy(FileDirectoryListing[NameCounter], MBFilename);
             if (strchr(MBFilename, '_'))
@@ -189,6 +193,18 @@ unsigned int FindMaxCardNumber()
     return BiggestNum;
 }
 
+unsigned long FindBiggestFile()
+{
+    unsigned int BiggestNum = 0;
+    unsigned int Dummy = 0;
+    for (unsigned int i = 0; i < GIMFileCount; i++)
+    {
+        if (GIMFileSizes[i] > BiggestNum)
+            BiggestNum = GIMFileSizes[i];
+    }
+    return BiggestNum;
+}
+
 bool bFileExists(const char* Filename)
 {
     FILE* chk = fopen(Filename, "rb");
@@ -225,6 +241,43 @@ unsigned int CountAltArtFiles(const char* InFolder, unsigned int CardID)
     }
 
     return count;
+}
+
+// this is dark magic right here straight from the game...
+int JpegDataCodec(void* data, long size)
+{
+    long data_cursor = 0xA0;
+    unsigned int DecodeFactor = _byteswap_ushort(*(short int*)((int)data + 0x9E)); // read value as big endian here...
+    
+    // may the best man win
+    // let the shadow games begin...
+    while (data_cursor < size)
+    {
+        DecodeFactor = ((50849 * DecodeFactor + 3343) >> 1) & 0xFFFF;
+        *(unsigned char*)((int)data + data_cursor) ^= (DecodeFactor >> 2) & 0xFF;
+        data_cursor++;
+    }
+
+    return 0;
+}
+
+// scan for the FF D9 end block
+unsigned long JpegFindEnd(void* data, long size)
+{
+    unsigned long EndPoint = 0;
+    long data_cursor = 0;
+
+    while (data_cursor < size)
+    {
+        if (*(unsigned char*)((int)data + data_cursor) == 0xFF && *(unsigned char*)((int)data + data_cursor + 1) == 0xD9)
+        {
+            EndPoint = data_cursor;
+            break;
+        }
+        data_cursor++;
+    }
+
+    return EndPoint;
 }
 
 
@@ -283,9 +336,9 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
         return -1;
     }
     if (PackingMode == CPM_MODE)
-        InputCIPHeader.BitshiftSize = ((st.st_size) - sizeof(GIMHeader)) >> 11;
+        InputCIPHeader.BitshiftSize = ((FindBiggestFile()) - sizeof(GIMHeader)) >> 11;
     else
-        InputCIPHeader.BitshiftSize = st.st_size >> 11;
+        InputCIPHeader.BitshiftSize = FindBiggestFile() >> 11;
 
     OffsetTableSize = ((InputCIPHeader.MaxCardNumber - InputCIPHeader.MinCardNumber) << 3) + 8;
     AltOffsetTableSize = AltArtCount * 8;
@@ -304,21 +357,33 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
 
     for (unsigned int i = InputCIPHeader.MinCardNumber; i <= InputCIPHeader.MaxCardNumber; i++)
     {
-        sprintf(TempStringBuffer, "%s\\%d.gim", InFolder, i);
+        if (PackingMode == CPJ_MODE)
+            sprintf(TempStringBuffer, "%s\\%d.jpg", InFolder, i);
+        else
+            sprintf(TempStringBuffer, "%s\\%d.gim", InFolder, i);
         CIPPackerInfo[PackerPrepCounter].CardID = i;
         CIPPackerInfo[PackerPrepCounter].GIMFileOffset = (unsigned int*)calloc(1, sizeof(int));
         CIPPackerInfo[PackerPrepCounter].OffsetPair = (CIPOffsetPair*)calloc(1, sizeof(CIPOffsetPair));
         if (bFileExists(TempStringBuffer))
         {
-            sprintf(TempStringBuffer, "%d.gim", i);
+            if (PackingMode == CPJ_MODE)
+                sprintf(TempStringBuffer, "%d.jpg", i);
+            else
+                sprintf(TempStringBuffer, "%d.gim", i);
             CIPPackerInfo[PackerPrepCounter].Filename = FileDirectoryListing[SearchFilenameIndex(FileDirectoryListing, TempStringBuffer)];
         }
         if (AltArtCount)
         {
-            sprintf(TempStringBuffer, "%s\\%d_0.gim", InFolder, i);
+            if (PackingMode == CPJ_MODE)
+                sprintf(TempStringBuffer, "%s\\%d_0.jpg", InFolder, i);
+            else
+                sprintf(TempStringBuffer, "%s\\%d_0.gim", InFolder, i);
             if (bFileExists(TempStringBuffer))
             {
-                sprintf(TempStringBuffer, "%d_0.gim", i);
+                if (PackingMode == CPJ_MODE)
+                    sprintf(TempStringBuffer, "%s\\%d_0.jpg", InFolder, i);
+                else
+                    sprintf(TempStringBuffer, "%s\\%d_0.gim", InFolder, i);
                 CIPPackerInfo[PackerPrepCounter].Filename = FileDirectoryListing[SearchFilenameIndex(FileDirectoryListing, TempStringBuffer)];
                 CIPPackerInfo[PackerPrepCounter].bIsAltArt = true;
                 CIPPackerInfo[PackerPrepCounter].AltArtCount = CountAltArtFiles(InFolder, i);
@@ -423,7 +488,10 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
             {
                 for (unsigned int j = 0; j < CIPPackerInfo[OffsetPairCounter].AltArtCount; j++)
                 {
-                    sprintf(TempStringBuffer, "%s\\%d_%d.gim", InFolder, CIPPackerInfo[OffsetPairCounter].CardID, j);
+                    if (PackingMode == CPJ_MODE)
+                        sprintf(TempStringBuffer, "%s\\%d_%d.jpg", InFolder, CIPPackerInfo[OffsetPairCounter].CardID, j);
+                    else
+                        sprintf(TempStringBuffer, "%s\\%d_%d.gim", InFolder, CIPPackerInfo[OffsetPairCounter].CardID, j);
                     printf("Writing: %d_%d (0x%X @0x%X) %s\n", CIPPackerInfo[OffsetPairCounter].CardID, j, CIPPackerInfo[OffsetPairCounter].OffsetPair[j].ID & 0x00FFFFFF, CIPPackerInfo[OffsetPairCounter].GIMFileOffset[j], TempStringBuffer);
                     fin = fopen(TempStringBuffer, "rb");
                     if (!fin)
@@ -437,7 +505,18 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
                         fseek(fin, sizeof(GIMHeader), SEEK_SET);
                     fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
                     fseek(fout, CIPPackerInfo[OffsetPairCounter].GIMFileOffset[j], SEEK_SET);
-                    fwrite(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fout);
+
+                    if (PackingMode == CPJ_MODE)
+                    {
+                        long EncodeSecret = _byteswap_ushort((unsigned short)i);
+                        *(unsigned short*)((int)InFileBuffer + 0x9E) = EncodeSecret;
+                        JpegDataCodec(InFileBuffer, InputCIPHeader.BitshiftSize << 11);
+                        sprintf((char*)InFileBuffer, "file: %d_%d.jpg encode_secret: 0x%X", CIPPackerInfo[OffsetPairCounter].CardID, j, i);
+                        fwrite(InFileBuffer, (InputCIPHeader.BitshiftSize << 11), 1, fout);
+                    }
+                    else
+                        fwrite(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fout);
+
                     fclose(fin);
                 }
             }
@@ -455,9 +534,27 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
                 memset(InFileBuffer, 0, InputCIPHeader.BitshiftSize << 11);
                 if (PackingMode == CPM_MODE)
                     fseek(fin, sizeof(GIMHeader), SEEK_SET);
-                fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
+                if (PackingMode == CPJ_MODE)
+                {
+                    fseek(fin, sizeof(JFIFHeader), SEEK_SET);
+                    fread((void*)((int)InFileBuffer + 0xA0), InputCIPHeader.BitshiftSize << 11, 1, fin);
+                }
+                else
+                    fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
+
                 fseek(fout, *CIPPackerInfo[OffsetPairCounter].GIMFileOffset, SEEK_SET);
-                fwrite(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fout);
+
+                if (PackingMode == CPJ_MODE)
+                {
+                    long EncodeSecret = _byteswap_ushort((unsigned short)i);
+                    *(unsigned short*)((int)InFileBuffer + 0x9E) = EncodeSecret;
+                    JpegDataCodec(InFileBuffer, InputCIPHeader.BitshiftSize << 11);
+                    sprintf((char*)InFileBuffer, "file: %s encode_secret: 0x%X", CIPPackerInfo[OffsetPairCounter].Filename, i);
+                    fwrite(InFileBuffer, (InputCIPHeader.BitshiftSize << 11), 1, fout);
+                }
+                else
+                    fwrite(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fout);
+
                 fclose(fin);
             }
         }
@@ -542,8 +639,6 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
             DataOffset = FirstOffset + ((InputCIPHeader.BitshiftSize << 11) * (i + ReadCounter));
             CardOffsetID = (FirstOffset >> 11) + ((InputCIPHeader.BitshiftSize) * (i + ReadCounter));
 
-            //printf("Searching CardID: %d\n", CardID);
-
             while(1)
             {
                ReadBuffer = *(int*)((int)HeaderBuffer + InputCIPHeader.OffsetTableTop + MemoryCursor);
@@ -580,7 +675,10 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
                 if (!(OffsetPair->Offset == 0))
                 {
                     fseek(fin, OffsetPair->Offset, SEEK_SET);
-                    sprintf(OutputFileName, "%s\\%d_%d.gim", OutFolder, i, SubArtCounter);
+                    if (ExtractionMode == CPJ_MODE)
+                        sprintf(OutputFileName, "%s\\%d_%d.jpg", OutFolder, i, SubArtCounter);
+                    else
+                        sprintf(OutputFileName, "%s\\%d_%d.gim", OutFolder, i, SubArtCounter);
                     printf("Writing: %d_%d (0x%X @0x%X) %s\n", i, SubArtCounter, OffsetPair->ID & 0x00FFFFFF, OffsetPair->Offset, OutputFileName);
                     fout = fopen(OutputFileName, "wb");
                     if (!fout)
@@ -595,7 +693,14 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
                     fread(GIMBuffer, GIMFileSize, 1, fin);
                     if (ExtractionMode == CPM_MODE)
                         fwrite(GIMHeader, sizeof(GIMHeader), 1, fout);
-                    fwrite(GIMBuffer, GIMFileSize, 1, fout);
+                    if (ExtractionMode == CPJ_MODE)
+                    {
+                        fwrite(JFIFHeader, sizeof(JFIFHeader), 1, fout);
+                        JpegDataCodec(GIMBuffer, GIMFileSize);
+                        fwrite((void*)((int)GIMBuffer + 0xA0), JpegFindEnd(GIMBuffer, GIMFileSize) - 0xA0, 1, fout);
+                    }
+                    else
+                        fwrite(GIMBuffer, GIMFileSize, 1, fout);
                     fclose(fout);
                 }
 
@@ -609,7 +714,10 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
             if (!(OffsetPair->Offset == 0))
             {
                 fseek(fin, OffsetPair->Offset, SEEK_SET);
-                sprintf(OutputFileName, "%s\\%d.gim", OutFolder, i);
+                if (ExtractionMode == CPJ_MODE)
+                    sprintf(OutputFileName, "%s\\%d.jpg", OutFolder, i);
+                else
+                    sprintf(OutputFileName, "%s\\%d.gim", OutFolder, i);
                 printf("Writing: %d (0x%X @0x%X) %s\n", i, OffsetPair->ID, OffsetPair->Offset, OutputFileName);
                 fout = fopen(OutputFileName, "wb");
                 if (!fout)
@@ -624,7 +732,14 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
                 fread(GIMBuffer, GIMFileSize, 1, fin);
                 if (ExtractionMode == CPM_MODE)
                     fwrite(GIMHeader, sizeof(GIMHeader), 1, fout);
-                fwrite(GIMBuffer, GIMFileSize, 1, fout);
+                if (ExtractionMode == CPJ_MODE)
+                {
+                    fwrite(JFIFHeader, sizeof(JFIFHeader), 1, fout);
+                    JpegDataCodec(GIMBuffer, GIMFileSize);
+                    fwrite((void*)((int)GIMBuffer + 0xA0), JpegFindEnd(GIMBuffer, GIMFileSize) - 0xA0, 1, fout);
+                }
+                else
+                    fwrite(GIMBuffer, GIMFileSize, 1, fout);
                 fclose(fout);
             }
         }
@@ -665,7 +780,7 @@ int DetectAndExtract(const char* InFilename, const char* OutFolder)
         break;
     case CPJ_MAGICNUM:
         printf("Detected a CPJ file!\n");
-        printf("Unimplemented...\n");
+        ExtractCIP(InFilename, OutFolder, CPJ_MODE);
         break;
     case CPL_MAGICNUM:
         printf("Detected a CPL file!\n");
@@ -685,7 +800,7 @@ int main(int argc, char* argv[])
 
     if (argc < 2)
     {
-        printf("USAGE (extract): %s InFile.cip [OutFolder]\nUSAGE (pack): %s -p InFolder OutCIP.cip\nUSAGE (pack middle): %s -pm InFolder OutCIP.cip\nUSAGE (pack CPL): %s -pl InFolder OutCIP.cip\n", argv[0], argv[0], argv[0], argv[0]);
+        printf("USAGE (extract): %s InFile.cip [OutFolder]\nUSAGE (pack): %s -p InFolder OutCIP.cip\nUSAGE (pack middle): %s -pm InFolder OutCIP.cip\nUSAGE (pack CPL): %s -pl InFolder OutCIP.cip\nUSAGE (pack CPJ): %s -pj InFolder OutCIP.cip\n", argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 0;
     }
 
@@ -699,8 +814,7 @@ int main(int argc, char* argv[])
             break;
         case 'j':
             printf("Packing mode (CPJ)\n");
-            printf("Unimplemented...\n");
-            //PackCIP(argv[2], argv[3], CPJ_MODE);
+            PackCIP(argv[2], argv[3], CPJ_MODE);
             break;
         case 'l':
             printf("Packing mode (CPL)\n");
