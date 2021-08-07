@@ -38,7 +38,7 @@ const char JFIFHeaderTFSP[] = CPJ_JFIFHEADER_TFSP;
 
 // pack mode stuff
 char** FileDirectoryListing;
-unsigned long* GIMFileSizes = NULL;
+unsigned long long* GIMFileSizes = NULL;
 unsigned int GIMFileCount = 0;
 unsigned int AltArtCount = 0;
 
@@ -119,7 +119,7 @@ DWORD GetDirectoryListing(const char* FolderPath) // platform specific code, usi
 
     // then create a file list in an array, redo the code
     FileDirectoryListing = (char**)calloc(GIMFileCount, sizeof(char*));
-    GIMFileSizes = (unsigned long*)calloc(GIMFileCount, sizeof(unsigned long));
+    GIMFileSizes = (unsigned long long*)calloc(GIMFileCount, sizeof(unsigned long long));
 
     ffd = { 0 };
     hFind = FindFirstFile(szDir, &ffd);
@@ -134,7 +134,7 @@ DWORD GetDirectoryListing(const char* FolderPath) // platform specific code, usi
         if (!(ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
         {
             wcstombs(MBFilename, ffd.cFileName, MAX_PATH);
-            GIMFileSizes[NameCounter] = ffd.nFileSizeLow + (ffd.nFileSizeHigh << 16);
+            GIMFileSizes[NameCounter] = ffd.nFileSizeLow + (ffd.nFileSizeHigh << 32);
             FileDirectoryListing[NameCounter] = (char*)calloc(strlen(MBFilename) + 1, sizeof(char));
             strcpy(FileDirectoryListing[NameCounter], MBFilename);
             if (strchr(MBFilename, '_'))
