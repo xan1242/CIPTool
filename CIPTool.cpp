@@ -229,13 +229,17 @@ unsigned int SearchFilenameIndex(char** NameList, char* Name)
     return result;
 }
 
-unsigned int CountAltArtFiles(const char* InFolder, unsigned int CardID)
+unsigned int CountAltArtFiles(const char* InFolder, unsigned int CardID, int PackingMode)
 {
     unsigned int count = 0;
 
     while (1)
     {
-        sprintf(TempStringBuffer, "%s\\%d_%d.gim", InFolder, CardID, count);
+        if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
+            sprintf(TempStringBuffer, "%s\\%d_%d.jpg", InFolder, CardID, count);
+        else
+            sprintf(TempStringBuffer, "%s\\%d_%d.gim", InFolder, CardID, count);
+
         if (!bFileExists(TempStringBuffer))
             break;
 
@@ -250,7 +254,7 @@ int JpegDataCodec(void* data, long size)
 {
     long data_cursor = 0xA0;
     unsigned int DecodeFactor = _byteswap_ushort(*(short int*)((int)data + 0x9E)); // read value as big endian here...
-    
+
     // may the best man win
     // let the shadow games begin...
     while (data_cursor < size)
@@ -269,7 +273,7 @@ unsigned long JpegFindEnd(void* data, long size)
     unsigned long EndPoint = 0;
     long data_cursor = 0;
 
-    while (data_cursor < size)
+    while (data_cursor < size - 1)
     {
         if (*(unsigned char*)((int)data + data_cursor) == 0xFF && *(unsigned char*)((int)data + data_cursor + 1) == 0xD9)
         {
@@ -341,7 +345,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
     if (PackingMode == CPM_MODE)
         InputCIPHeader.BitshiftSize = ((FindBiggestFile()) - sizeof(GIMHeader)) >> 11;
     else
-        InputCIPHeader.BitshiftSize = FindBiggestFile() >> 11;
+        InputCIPHeader.BitshiftSize = (FindBiggestFile() + 2047) >> 11;
 
     OffsetTableSize = ((InputCIPHeader.MaxCardNumber - InputCIPHeader.MinCardNumber) << 3) + 8;
     AltOffsetTableSize = AltArtCount * 8;
@@ -389,7 +393,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
                     sprintf(TempStringBuffer, "%s\\%d_0.gim", InFolder, i);
                 CIPPackerInfo[PackerPrepCounter].Filename = FileDirectoryListing[SearchFilenameIndex(FileDirectoryListing, TempStringBuffer)];
                 CIPPackerInfo[PackerPrepCounter].bIsAltArt = true;
-                CIPPackerInfo[PackerPrepCounter].AltArtCount = CountAltArtFiles(InFolder, i);
+                CIPPackerInfo[PackerPrepCounter].AltArtCount = CountAltArtFiles(InFolder, i, PackingMode);
                 free(CIPPackerInfo[PackerPrepCounter].GIMFileOffset);
                 free(CIPPackerInfo[PackerPrepCounter].OffsetPair);
                 CIPPackerInfo[PackerPrepCounter].GIMFileOffset = (unsigned int*)calloc(CIPPackerInfo[PackerPrepCounter].AltArtCount, sizeof(int));
@@ -439,7 +443,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
     // start writing to file
     // write header
     fwrite(&InputCIPHeader, sizeof(CIPHeader), 1, fout);
-    
+
     // write offset table pairs for single art cards and do alt art ones later
     OffsetPairCounter = 0;
     for (unsigned int i = InputCIPHeader.MinCardNumber; i <= InputCIPHeader.MaxCardNumber; i++)
@@ -506,7 +510,21 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
                     memset(InFileBuffer, 0, InputCIPHeader.BitshiftSize << 11);
                     if (PackingMode == CPM_MODE)
                         fseek(fin, sizeof(GIMHeader), SEEK_SET);
-                    fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
+                    
+                    if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
+                    {
+                        if (PackingMode == CPJ_TFSP_MODE)
+                            fseek(fin, sizeof(JFIFHeaderTFSP), SEEK_SET);
+                        else
+                            fseek(fin, sizeof(JFIFHeader), SEEK_SET);
+
+                        fread((void*)((int)InFileBuffer + 0xA0), (InputCIPHeader.BitshiftSize << 11) - 0xA0, 1, fin);
+                    }
+                    else
+                    {
+                        fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
+                    }
+
                     fseek(fout, CIPPackerInfo[OffsetPairCounter].GIMFileOffset[j], SEEK_SET);
 
                     if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
@@ -540,7 +558,7 @@ int PackCIP(const char* InFolder, const char* OutFilename, int PackingMode)
                 if ((PackingMode == CPJ_MODE) || (PackingMode == CPJ_TFSP_MODE))
                 {
                     fseek(fin, sizeof(JFIFHeader), SEEK_SET);
-                    fread((void*)((int)InFileBuffer + 0xA0), InputCIPHeader.BitshiftSize << 11, 1, fin);
+                    fread((void*)((int)InFileBuffer + 0xA0), (InputCIPHeader.BitshiftSize << 11) - 0xA0, 1, fin);
                 }
                 else
                     fread(InFileBuffer, InputCIPHeader.BitshiftSize << 11, 1, fin);
@@ -642,20 +660,20 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
             DataOffset = FirstOffset + ((InputCIPHeader.BitshiftSize << 11) * (i + ReadCounter));
             CardOffsetID = (FirstOffset >> 11) + ((InputCIPHeader.BitshiftSize) * (i + ReadCounter));
 
-            while(1)
+            while (1)
             {
-               ReadBuffer = *(int*)((int)HeaderBuffer + InputCIPHeader.OffsetTableTop + MemoryCursor);
-               if (ReadBuffer == 0xFFFFFFFF)
-                   break;
-               ReadBuffer <<= 1;
-               ReadBuffer >>= 1;
-               if (CardOffsetID == ReadBuffer)
-               {
-                   *(int*)((int)HeaderBuffer + InputCIPHeader.OffsetTableTop + MemoryCursor + 4) = DataOffset;
-               }
-               MemoryCursor += 8;
+                ReadBuffer = *(int*)((int)HeaderBuffer + InputCIPHeader.OffsetTableTop + MemoryCursor);
+                if (ReadBuffer == 0xFFFFFFFF)
+                    break;
+                ReadBuffer <<= 1;
+                ReadBuffer >>= 1;
+                if (CardOffsetID == ReadBuffer)
+                {
+                    *(int*)((int)HeaderBuffer + InputCIPHeader.OffsetTableTop + MemoryCursor + 4) = DataOffset;
+                }
+                MemoryCursor += 8;
             }
-           
+
         }
         ReadCounter += 10;
     }
@@ -703,7 +721,7 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
                         else
                             fwrite(JFIFHeader, sizeof(JFIFHeader), 1, fout);
                         JpegDataCodec(GIMBuffer, GIMFileSize);
-                        fwrite((void*)((int)GIMBuffer + 0xA0), JpegFindEnd(GIMBuffer, GIMFileSize) - 0xA0, 1, fout);
+                        fwrite((void*)((int)GIMBuffer + 0xA0), JpegFindEnd(GIMBuffer, GIMFileSize) - 0xA0 + 2, 1, fout);
                     }
                     else
                         fwrite(GIMBuffer, GIMFileSize, 1, fout);
@@ -745,7 +763,7 @@ int ExtractCIP(const char* InFilename, const char* OutFolder, int ExtractionMode
                     else
                         fwrite(JFIFHeader, sizeof(JFIFHeader), 1, fout);
                     JpegDataCodec(GIMBuffer, GIMFileSize);
-                    fwrite((void*)((int)GIMBuffer + 0xA0), JpegFindEnd(GIMBuffer, GIMFileSize) - 0xA0, 1, fout);
+                    fwrite((void*)((int)GIMBuffer + 0xA0), JpegFindEnd(GIMBuffer, GIMFileSize) - 0xA0 + 2, 1, fout);
                 }
                 else
                     fwrite(GIMBuffer, GIMFileSize, 1, fout);
